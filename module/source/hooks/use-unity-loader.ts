@@ -3,6 +3,12 @@ import { isBrowserEnvironment } from "../constants/is-browser-environment";
 import { UnityLoaderStatus } from "../enums/unity-loader-status";
 import { UnityConfig } from "../exports";
 
+// Map to track script references and their instance count
+const scriptReferenceMap = new Map<
+  string,
+  { count: number; status: UnityLoaderStatus }
+>();
+
 /**
  * Hook to embed a Unity Loader script.
  * @param source The source of the unity loader.
@@ -12,73 +18,90 @@ const useUnityLoader = (unityConfig: UnityConfig): UnityLoaderStatus => {
   const [status, setStatus] = useState<UnityLoaderStatus>(
     UnityLoaderStatus.Loading
   );
+  const { loaderUrl } = unityConfig;
+
   // Effect hook will be invoked when the source changes.
   useEffect(() => {
     // It is possible for the application being rendered server side. In
     // this scenario, the window is not available. We can't create a Unity
     // Loader in this case.
     if (isBrowserEnvironment === false) {
-      return;
+      return undefined;
     }
     // If the script's source is null, we'll reset the status to idle.
     if (unityConfig.loaderUrl === null) {
       setStatus(UnityLoaderStatus.Idle);
-      return;
+      return undefined;
     }
+
     /**
      * Find existing script element by source. It may have been added by
      * another instance of this hook.
      */
-    let script: HTMLScriptElement | null = window.document.querySelector(
-      `script[src="${unityConfig.loaderUrl}"]`
-    );
-    // If there wan't another instance of this script, we're going to create a
-    // new one with the provided source.
-    if (script === null) {
-      script = window.document.createElement("script");
+    let script = document.querySelector(
+      `script[src="${loaderUrl}"]`
+    ) as HTMLScriptElement | null;
+
+    // If script exists, increase reference count, else we'll create a new script.
+    if (script) {
+      const refData = scriptReferenceMap.get(loaderUrl) || {
+        count: 0,
+        status: UnityLoaderStatus.Loading,
+      };
+      scriptReferenceMap.set(loaderUrl, {
+        count: refData.count + 1,
+        status: refData.status,
+      });
+      setStatus(refData.status);
+    } else {
+      script = document.createElement("script");
       script.type = "text/javascript";
-      script.src = unityConfig.loaderUrl;
+      script.src = loaderUrl;
       script.async = true;
       script.setAttribute("data-status", "loading");
-      // Add script to window.document body.
-      window.document.body.appendChild(script);
-      // Store status in attribute on script. This can be read by other
-      // instances of this hook.
-      script.addEventListener("load", () =>
-        script?.setAttribute("data-status", "loaded")
-      );
-      script.addEventListener("error", () =>
-        script?.setAttribute("data-status", "error")
-      );
-    } else {
-      // If there already was a script with the same source, grab its existing
-      // script status from attribute and set to state.
-      setStatus(
-        script.getAttribute("data-status") === "loaded"
-          ? UnityLoaderStatus.Loaded
-          : UnityLoaderStatus.Error
-      );
+      document.body.appendChild(script);
+
+      // Initialize reference map entry
+      scriptReferenceMap.set(loaderUrl, {
+        count: 1,
+        status: UnityLoaderStatus.Loading,
+      });
+
+      script.addEventListener("load", () => {
+        script?.setAttribute("data-status", "loaded");
+        scriptReferenceMap.set(loaderUrl, {
+          count: 1,
+          status: UnityLoaderStatus.Loaded,
+        });
+        setStatus(UnityLoaderStatus.Loaded);
+      });
+
+      script.addEventListener("error", () => {
+        script?.setAttribute("data-status", "error");
+        scriptReferenceMap.set(loaderUrl, {
+          count: 1,
+          status: UnityLoaderStatus.Error,
+        });
+        setStatus(UnityLoaderStatus.Error);
+      });
     }
-    /**
-     * Script event handler to update status in state. Even if the script
-     * already exists we still need to add event handlers to update the state
-     * for this hook instance.
-     * @param event The event that was triggered.
-     */
-    const setStateFromEvent = (event: Event) =>
-      setStatus(
-        event.type === "load"
-          ? UnityLoaderStatus.Loaded
-          : UnityLoaderStatus.Error
-      );
-    script.addEventListener("load", setStateFromEvent);
-    script.addEventListener("error", setStateFromEvent);
+
     // Remove event listeners on cleanup.
     return () => {
-      if (script !== null) {
-        script.removeEventListener("load", setStateFromEvent);
-        script.removeEventListener("error", setStateFromEvent);
-        window.document.body.removeChild(script);
+      const refData = scriptReferenceMap.get(loaderUrl);
+
+      if (refData) {
+        if (refData.count > 1) {
+          // Decrease reference count when an instance unmounts
+          scriptReferenceMap.set(loaderUrl, {
+            ...refData,
+            count: refData.count - 1,
+          });
+        } else {
+          // Remove script only when the last instance unmounts
+          scriptReferenceMap.delete(loaderUrl);
+          script?.remove();
+        }
       }
     };
   }, [unityConfig.loaderUrl]);
