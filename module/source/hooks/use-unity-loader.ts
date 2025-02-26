@@ -70,7 +70,6 @@ const useUnityLoader = (unityConfig: UnityConfig): UnityLoaderStatus => {
       script.src = loaderUrl;
       script.async = true;
       script.setAttribute("data-status", "loading");
-      document.body.appendChild(script);
 
       // Define load handler.
       const handleLoad = () => {
@@ -97,6 +96,9 @@ const useUnityLoader = (unityConfig: UnityConfig): UnityLoaderStatus => {
       // Attach listeners.
       script.addEventListener("load", handleLoad);
       script.addEventListener("error", handleError);
+
+      // Append the script to the document body.
+      document.body.appendChild(script);
 
       // Initialize the reference map.
       scriptReferenceMap.set(loaderUrl, {
